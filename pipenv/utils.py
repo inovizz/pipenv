@@ -24,7 +24,6 @@ import tomlkit
 from click import echo as click_echo
 
 from pipenv import environments
-from pipenv._compat import DEFAULT_ENCODING
 from pipenv.exceptions import (
     PipenvCmdError, PipenvUsageError, RequirementError, ResolutionFailure
 )
@@ -36,7 +35,6 @@ from pipenv.vendor.vistir.compat import (
 )
 from pipenv.vendor.vistir.misc import fs_str, run
 from pipenv.vendor.vistir.contextmanagers import open_file
-from pipenv.vendor.pip_shims import shims
 
 
 if environments.MYPY_RUNNING:
@@ -371,7 +369,7 @@ def get_pipenv_sitedir():
     return None
 
 
-class HashCache(shims.SafeFileCache):
+class HashCacheMixin:
 
     """Caches hashes of PyPI artifacts so we do not need to re-download them.
 
@@ -383,7 +381,7 @@ class HashCache(shims.SafeFileCache):
         self.session = session
         if not os.path.isdir(directory):
             os.makedirs(directory, exist_ok=True)
-        super(HashCache, self).__init__(directory=directory)
+        super().__init__(directory=directory)
 
     def get_hash(self, link):
         # If there is no link hash (i.e., md5, sha256, etc.), we don't want
@@ -395,6 +393,8 @@ class HashCache(shims.SafeFileCache):
         return hash_value.decode("utf8")
 
     def _get_file_hash(self, link):
+        from pipenv.vendor.pip_shims import shims
+
         h = hashlib.new(shims.FAVORITE_HASH)
         with open_file(link.url, self.session) as fp:
             for chunk in iter(lambda: fp.read(8096), b""):
@@ -431,7 +431,7 @@ class Resolver:
         self._pip_options = None
         self._pip_command = None
         self._retry_attempts = 0
-        self._hash_cache = HashCache(os.path.join(project.s.PIPENV_CACHE_DIR, "hashes"), self.session)
+        self._hash_cache = None
 
     def __repr__(self):
         return (
@@ -442,7 +442,19 @@ class Resolver:
     @staticmethod
     @lru_cache()
     def _get_pip_command():
+        from pipenv.vendor.pip_shims import shims
+
         return shims.InstallCommand()
+
+    @property
+    def hash_cache(self):
+        from pipenv.vendor.pip_shims import shims
+
+        if not self._hash_cache:
+            self._hash_cache = type("HashCache", (HashCacheMixin, shims.SafeFileHash), {})(
+                os.path.join(self.project.s.PIPENV_CACHE_DIR, "hashes"), self.session
+            )
+        return self._hash_cache
 
     @classmethod
     def get_metadata(
@@ -787,7 +799,7 @@ class Resolver:
 
     @property
     def finder(self):
-
+        from pipenv.vendor.pip_shims import shims
         if self._finder is None:
             self._finder = shims.get_package_finder(
                 install_cmd=self.pip_command,
@@ -798,6 +810,8 @@ class Resolver:
 
     @property
     def parsed_constraints(self):
+        from pipenv.vendor.pip_shims import shims
+
         if self._parsed_constraints is None:
             self._parsed_constraints = shims.parse_requirements(
                 self.constraint_file, finder=self.finder, session=self.session,
@@ -895,6 +909,7 @@ class Resolver:
         return cleaned_checksums
 
     def _get_hashes_from_pypi(self, ireq):
+        from pipenv.vendor.pip_shims import shims
 
         pkg_url = f"https://pypi.org/pypi/{ireq.name}/json"
         session = _get_requests_session(self.project.s.PIPENV_MAX_RETRIES)
@@ -958,11 +973,12 @@ class Resolver:
         return self.hashes
 
     def _get_hash_from_link(self, link):
+        from pipenv.vendor.pip_shims import shims
 
         if link.hash and link.hash_name == shims.FAVORITE_HASH:
             return f"{link.hash_name}:{link.hash}"
 
-        return self._hash_cache.get(link)
+        return self.hash_cache.get(link)
 
     def _clean_skipped_result(self, req, value):
         ref = None
@@ -1543,6 +1559,8 @@ def is_file(package):
 def pep440_version(version):
     """Normalize version to PEP 440 standards"""
     # Use pip built-in version parser.
+    from pipenv.vendor.pip_shims import shims
+
     return str(shims.parse_version(version))
 
 
