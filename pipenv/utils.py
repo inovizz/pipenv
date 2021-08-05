@@ -960,7 +960,7 @@ class Resolver:
 
         applicable_candidates = self.finder.find_best_candidate(
             ireq.name, ireq.specifier
-        ).applicable_candidates
+        ).iter_applicable()
         return {
             self._get_hash_from_link(candidate.link)
             for candidate in applicable_candidates
